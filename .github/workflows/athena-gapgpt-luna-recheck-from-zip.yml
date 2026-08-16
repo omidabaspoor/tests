@@ -1,0 +1,73 @@
+name: GapGPT Luna Contract Recheck
+
+on:
+  workflow_dispatch:
+
+jobs:
+  luna-contract-recheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+
+      - name: Verify ZIP and extract project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="vmania-athena-runtime-poc-01e2a-clean.zip"
+          EXPECTED_SHA256="c0d546cbd96a3af7624447a3c746ccad7071ef0bc2dfb34716a01dfd38a3ccbf"
+          test -f "$ZIP"
+          echo "$EXPECTED_SHA256  $ZIP" | sha256sum --check --strict
+          unzip -q "$ZIP" -d /tmp/athena-workspace
+          PROJECT="/tmp/athena-workspace/vmania-athena-runtime-poc-01e2a"
+          test -f "$PROJECT/pyproject.toml"
+          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python -m pip install -e '.[dev]'
+
+      - name: Run all non-integration tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: pytest -q -m "not integration"
+
+      - name: Discover model inventory
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GAPGPT_API_KEY: ${{ secrets.GAPGPT_API_KEY }}
+        run: |
+          python -m athena_runtime.providers.gapgpt_discover \
+            --json-output artifacts/gapgpt-model-inventory.json \
+            --markdown-output artifacts/gapgpt-model-inventory.md
+
+      - name: Print bounded plan
+        run: echo "Luna only; C01 only; hard logical call cap = 1; no retry, repair, or fallback"
+
+      - name: Run Luna schema contract recheck
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GAPGPT_API_KEY: ${{ secrets.GAPGPT_API_KEY }}
+        run: |
+          python -m athena_runtime.providers.gapgpt_luna_recheck \
+            --inventory artifacts/gapgpt-model-inventory.json \
+            --json-output artifacts/gapgpt-luna-contract-recheck.json \
+            --markdown-output artifacts/gapgpt-luna-contract-recheck.md
+
+      - name: Upload sanitized artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gapgpt-luna-contract-recheck
+          path: |
+            ${{ env.PROJECT_DIR }}/artifacts/gapgpt-luna-contract-recheck.json
+            ${{ env.PROJECT_DIR }}/artifacts/gapgpt-luna-contract-recheck.md
+          retention-days: 3
+          if-no-files-found: error
