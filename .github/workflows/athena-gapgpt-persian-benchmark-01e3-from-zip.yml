@@ -1,0 +1,73 @@
+name: GapGPT Persian Benchmark Stage A
+
+on:
+  workflow_dispatch:
+
+jobs:
+  persian-benchmark-stage-a:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+
+      - name: Verify ZIP and extract project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="vmania-athena-runtime-poc-01e3-clean.zip"
+          EXPECTED_SHA256="27e26ae100df87ee224c944b2fd5639cd3dfff1c59f5174919ff7f68709a74a5"
+          test -f "$ZIP"
+          echo "$EXPECTED_SHA256  $ZIP" | sha256sum --check --strict
+          unzip -q "$ZIP" -d /tmp/athena-workspace
+          PROJECT="/tmp/athena-workspace/vmania-athena-runtime-poc-01e3"
+          test -f "$PROJECT/pyproject.toml"
+          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python -m pip install -e '.[dev]'
+
+      - name: Run all non-integration tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: pytest -q -m "not integration"
+
+      - name: Discover model inventory
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GAPGPT_API_KEY: ${{ secrets.GAPGPT_API_KEY }}
+        run: |
+          python -m athena_runtime.providers.gapgpt_discover \
+            --json-output artifacts/gapgpt-model-inventory.json \
+            --markdown-output artifacts/gapgpt-model-inventory.md
+
+      - name: Print bounded plan
+        run: echo "Gemini and Sol; B01-B03; hard cap = 6; no retry, repair, fallback, or tie-breaker"
+
+      - name: Run Persian benchmark Stage A
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GAPGPT_API_KEY: ${{ secrets.GAPGPT_API_KEY }}
+        run: |
+          python -m athena_runtime.providers.persian_benchmark \
+            --inventory artifacts/gapgpt-model-inventory.json \
+            --json-output artifacts/gapgpt-persian-benchmark-stage-a.json \
+            --markdown-output artifacts/gapgpt-persian-benchmark-stage-a.md
+
+      - name: Upload sanitized benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: gapgpt-persian-benchmark-stage-a
+          path: |
+            ${{ env.PROJECT_DIR }}/artifacts/gapgpt-persian-benchmark-stage-a.json
+            ${{ env.PROJECT_DIR }}/artifacts/gapgpt-persian-benchmark-stage-a.md
+          retention-days: 3
+          if-no-files-found: error
