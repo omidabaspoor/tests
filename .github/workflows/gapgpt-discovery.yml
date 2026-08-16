@@ -1,0 +1,61 @@
+name: GapGPT Model Discovery
+
+on:
+  workflow_dispatch:
+
+jobs:
+  discover-models:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+
+      - name: Verify ZIP and extract project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="workspace-01a0078c-b64b-74c7-acb6-50546f38c794.zip"
+          EXPECTED_SHA256="2799d1c965c6ea171203c2f6760e930c6c7123a223daa99b77b95ffb42004423"
+          test -f "$ZIP"
+          echo "$EXPECTED_SHA256  $ZIP" | sha256sum --check --strict
+          unzip -q "$ZIP" -d /tmp/athena-workspace
+          PROJECT="/tmp/athena-workspace/vmania-athena-runtime-poc-01e0"
+          test -f "$PROJECT/pyproject.toml"
+          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python -m pip install -e '.[dev]'
+
+      - name: Run all non-integration tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: pytest -q -m "not integration"
+
+      - name: Run provider boundary tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: pytest -q tests/unit/test_gapgpt_provider_01e0.py
+
+      - name: Discover GapGPT models
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GAPGPT_API_KEY: ${{ secrets.GAPGPT_API_KEY }}
+        run: |
+          python -m athena_runtime.providers.gapgpt_discover \
+            --json-output artifacts/gapgpt-model-inventory.json \
+            --markdown-output artifacts/gapgpt-model-inventory.md
+
+      - name: Upload non-sensitive model inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: gapgpt-model-inventory
+          path: ${{ env.PROJECT_DIR }}/artifacts/
+          retention-days: 3
+          if-no-files-found: error
